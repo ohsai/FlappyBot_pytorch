@@ -276,8 +276,9 @@ def get_screen():
 
 env.reset()
 plt.figure()
-plt.imshow(get_screen().cpu().squeeze(0).permute(1, 2, 0).numpy(),
-           interpolation='none')
+image = get_screen().cpu().squeeze(0).permute(1, 2, 0).numpy()
+print(type(image))
+plt.imshow(image,interpolation=None)
 plt.title('Example extracted screen')
 plt.show()
 
