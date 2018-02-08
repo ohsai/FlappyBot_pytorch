@@ -444,10 +444,12 @@ for i_episode in range(num_episodes):
     last_screen = get_screen()
     current_screen = get_screen()
     state = current_screen - last_screen
+    print("new episode")
     for t in count():
         # Select and perform an action
         action = select_action(state)
         _, reward, done, _ = env.step(action[0, 0])
+
         reward = Tensor([reward])
 
         # Observe new state
@@ -460,6 +462,7 @@ for i_episode in range(num_episodes):
 
         # Store the transition in memory
         memory.push(state, action, next_state, reward)
+        print(reward)
 
         # Move to the next state
         state = next_state

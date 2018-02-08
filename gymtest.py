@@ -26,8 +26,6 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import torchvision.transforms as T
 
-
-#env = gym.make('CartPole-v0').unwrapped
 env = gym.make('FlappyBird-v0' if len(sys.argv)<2 else sys.argv[1])
 outdir = './random-agent-results'
 env = Monitor(env,directory=outdir,force=True)
@@ -96,17 +94,10 @@ class DQN(nn.Module):
         self.head = nn.Linear(672, 2)
 
     def forward(self, x):
-        #print("forward")
-        #print(x.shape)
         x = F.relu(self.bn1(self.conv1(x)))
-        #print(x.shape)
         x = F.relu(self.bn2(self.conv2(x)))
-        #print(x.shape)
         x = F.relu(self.bn3(self.conv3(x)))
-        #print(x.shape)
         x =  self.head(x.view(x.size(0), -1))
-        #print(x.shape)
-        #print("return")
         return x
 
 
@@ -116,9 +107,9 @@ class DQN(nn.Module):
 
 BATCH_SIZE = 128
 GAMMA = 0.999
-EPS_START = 0.9
-EPS_END = 0.05
-EPS_DECAY = 200
+EPS_START = 0.1
+EPS_END = 0.001
+EPS_DECAY = 1000
 
 model = DQN()
 
@@ -139,8 +130,6 @@ def select_action(state):
         math.exp(-1. * steps_done / EPS_DECAY)
     steps_done += 1
     if sample > eps_threshold:
-        #print("Hey")
-        #print(Variable(state,volatile=True).type(FloatTensor).shape)
         return model(Variable(state, volatile=True).type(FloatTensor)).data.max(1)[1].view(1, 1)
     else:
         return LongTensor([[random.randrange(2)]])
@@ -179,6 +168,10 @@ def BCHW_format(state_screen):
     state_screen = resize(state_screen).unsqueeze(0).type(Tensor)
     #print(state_screen.shape)
     return state_screen
+
+def last_4_frames(frame1, frame2, frame3, frame4):
+    4_frames_concatenated = torch.cat((frame1,frame2,frame3,frame4),2)
+    return 4_frames_concatenated
 
 # Hyperparameters and Utilities Done
 
@@ -240,60 +233,39 @@ def optimize_model():
 #logger = logging.getLogger()
 #logger.setLevel(logging.INFO)
 
-
-#data = np.zeros( (512,512,3), dtype=np.uint8)
-#data[256,256:512] = [255,0,0]
-#plt.figure()
-#plt.imshow(data)
-#plt.show()
-#state_test = env.reset()
-#print("Hello World!")
-#print(env.action_space)
-#print(env.observation_space.high)
-#print(env.observation_space.low)
-
-
-num_episodes = 1000
+num_episodes = 2000
 for i_episode in range(num_episodes):
     # Initialize the environment and state
     state = env.reset()
     state = BCHW_format(state)
-    #last_screen = get_screen()
-    #current_screen = get_screen()
-    #state = current_screen - last_screen
+
+    4_frames = [state,state,state,state]
+    state = last_4_frames(state,4_frames[1],4_frames[2],4_frames[3])
+
+    print("New Episode")
     for t in count():
         # Select and perform an action
         env.render()
-        #env.render(mode='rgb_array')
         action = select_action(state)
         next_state, reward, done, _ = env.step(action[0, 0])
+        
+        if reward < 0:
+            reward = -10
+        else:
+            reward = 1
+        #print(reward)
+        
         reward = Tensor([reward])
-
-        # Observe new state
-        #image = np.random.randint(255,size=(512,288,3)).astype('uint8')
-        #plt.imshow(BCHW_format(state_test).cpu().squeeze(0).permute(1, 2, 0).numpy(),interpolation='none')
-        #image = next_state
-        #plt.imshow(image)
-        #plt.title('Example extracted screen')
-        #plt.show()
-        #print(image)
-        #image = next_state
-
-        #print(next_state)
-        #last_screen = current_screen
-        #current_screen = get_screen()
+        
         if not done:
-            #next_state = current_screen - last_screen
             next_state = BCHW_format(next_state)
-            #image = np.transpose(next_state.squeeze(),(1,2,0))
-            #plt.imshow(image)
-            #plt.title('Example extracted screen')
-            #plt.show()
         else:
             next_state = None
 
         # Store the transition in memory
-        memory.push(state, action, next_state, reward)
+        4_frames = [next_state, 4_frames[0], 4_frames[1], 4_frames[2]]
+        next_state = last_4_frames(next_state,4_frames[1],4_frames[2],4_frames[3])
+        memory.push(state, action, next_state, reward) # edit
 
         # Move to the next state
         state = next_state
@@ -306,10 +278,18 @@ for i_episode in range(num_episodes):
             break
 
 print('Complete')
-#env.render(close=True)
-env.close()
-#plt.ioff()
-#plt.show()
 
 # Main part with game execution Done
 
+# Save Duration Data to text file
+textfile = open('./episode_duration.txt','a')
+textfile.write('###############New Experiment##########\n')
+for duration in episode_durations:
+    print(duration)
+    textfile.write("%s\n" % duration)
+
+textfile.close()
+
+env.close()
+plt.ioff()
+plt.show()
