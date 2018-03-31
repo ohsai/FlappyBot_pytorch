@@ -1,15 +1,10 @@
-
-# Import
-
-import gym
-from gym.wrappers import Monitor
-import gym_ple
-import math
-import random
+import ple.games.flappybird as FlappyBird
+from ple import PLE
 import numpy as np
+import random
+import math
 import matplotlib
 import matplotlib.pyplot as plt
-
 
 from collections import namedtuple
 from itertools import count
@@ -18,18 +13,22 @@ from PIL import Image
 import logging
 import sys
 
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.autograd import Variable
-import torchvision.transforms as T
+#import torchvision.transforms as T
+import cv2
 
-env = gym.make('FlappyBird-v0' if len(sys.argv)<2 else sys.argv[1])
-outdir = './random-agent-results'
-env = Monitor(env,directory=outdir,force=True)
-env.seed(0)
+game = FlappyBird.FlappyBird(pipe_gap=300)
+env = PLE(game, fps=30,display_screen=True,force_fps=True,
+        reward_values={
+            "positive":0.9,
+            "negative":0.0,
+            "tick": 0.1,
+            "loss": -1.1,
+            })
 
 # set up matplotlib
 is_ipython = 'inline' in matplotlib.get_backend()
@@ -85,19 +84,38 @@ class DQN(nn.Module):
 
     def __init__(self):
         super(DQN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=5, stride=2)
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=5, stride=2)
-        self.bn2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 32, kernel_size=5, stride=2)
-        self.bn3 = nn.BatchNorm2d(32)
-        self.head = nn.Linear(672, 2)
+        self.conv1 = nn.Conv2d(4, 32, kernel_size=8, stride=4,padding = 2)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.mp1 = nn.MaxPool2d(2,2)
+        self.conv2 = nn.Conv2d(32,64, kernel_size=4, stride=2, padding = 1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.mp2 = nn.MaxPool2d(2,2)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding = 1)
+        self.bn3 = nn.BatchNorm2d(64)
+        self.mp3 = nn.MaxPool2d(2,2)
+        self.fc1 = nn.Linear(1600, 512)
+        self.fc2 = nn.Linear(512,2)
 
-    def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        x =  self.head(x.view(x.size(0), -1))
+    def forward(self, input_tensor):
+       # print(input_tensor.shape)
+        x = F.relu(self.conv1(input_tensor))
+        #print(x.shape)
+        x = self.bn1(self.mp1(x))
+        #print(x.shape)
+        x = F.relu(self.conv2(x))
+        #print(x.shape)
+        x = self.bn2(x)
+        #x = self.bn2(self.mp2(x))
+        #print(x.shape)
+        x = F.relu(self.conv3(x))
+        #print(x.shape)
+        #x = self.bn3(self.mp3(x))
+        x = self.bn3(x)
+        #print(x.shape)
+        #print(x.view(x.size(0),-1).data.shape)
+        x =  F.relu(self.fc1(x.view(x.size(0), -1)))
+        #print(x.shape)
+        x = self.fc2(x)
         return x
 
 
@@ -105,19 +123,23 @@ class DQN(nn.Module):
 
 # Hyperparameters and Utilities
 
-BATCH_SIZE = 128
-GAMMA = 0.999
-EPS_START = 0.1
-EPS_END = 0.001
-EPS_DECAY = 1000
+BATCH_SIZE = 32
+GAMMA = 0.99
+EPS_START = 0.0001
+EPS_END = 0.0001
+EPS_DECAY = 3000000
+observe_or_train = 0
+OBSERVE = 20000
+FRAME_PER_ACTION = 1
+expected_q_value = 0
 
 model = DQN()
 
 if use_cuda:
     model.cuda()
 
-optimizer = optim.RMSprop(model.parameters())
-memory = ReplayMemory(10000)
+optimizer = optim.Adam(model.parameters(),lr=0.000001)
+memory = ReplayMemory(30000)
 
 
 steps_done = 0
@@ -129,10 +151,18 @@ def select_action(state):
     eps_threshold = EPS_END + (EPS_START - EPS_END) * \
         math.exp(-1. * steps_done / EPS_DECAY)
     steps_done += 1
-    if sample > eps_threshold:
-        return model(Variable(state, volatile=True).type(FloatTensor)).data.max(1)[1].view(1, 1)
+    if sample > eps_threshold and observe_or_train > OBSERVE:
+        policy = model(Variable(state, volatile=True).type(FloatTensor))
+        think = policy.data.max(1)[1].view(1, 1)
+        #if(think[0][0] == 0):
+            #print("think! jump!")
+        return think
     else:
-        return LongTensor([[random.randrange(2)]])
+        rng = LongTensor([[random.randrange(2)]])
+        #if(rng[0][0] == 0):
+            #print("random! jump!")
+        return rng
+            
 
 
 episode_durations = []
@@ -157,21 +187,37 @@ def plot_durations():
         display.clear_output(wait=True)
         display.display(plt.gcf())
 
+def image_thresholding(x):
+    if x < 0.01:
+        return 0
+    else:
+        return 1
+'''
 resize = T.Compose([T.ToPILImage(),
-                    T.Resize(45, interpolation=Image.CUBIC),
-                    T.ToTensor()])
-
+                    T.Grayscale()])
+resize2 = T.Compose([T.RandomRotation((90,90)),
+                    T.Resize((80,80)),
+                    T.ToTensor(),
+                    lambda x : 0 if x < 0.01 else 1
+                    ])
+'''
 def BCHW_format(state_screen):
-    #print(state_screen.shape)
-    state_screen = state_screen.transpose((2,0,1))
+    state_screen = cv2.resize(state_screen,(80,80))
+    state_screen = cv2.cvtColor(state_screen, cv2.COLOR_BGR2GRAY)
+    ret, state_screen = cv2.threshold(state_screen, 1, 255, cv2.THRESH_BINARY)
+    #print(state_screen)
+    #plt.imshow(state_screen, interpolation='nearest')
+    #plt.show()
+    #input()
+    state_screen = np.reshape(state_screen,(80,80,1))
     state_screen = torch.from_numpy(state_screen)
-    state_screen = resize(state_screen).unsqueeze(0).type(Tensor)
-    #print(state_screen.shape)
+    state_screen = state_screen.permute(2,0,1)
+    state_screen = state_screen.unsqueeze(0).type(Tensor)
     return state_screen
 
 def last_4_frames(frame1, frame2, frame3, frame4):
-    4_frames_concatenated = torch.cat((frame1,frame2,frame3,frame4),2)
-    return 4_frames_concatenated
+    frames_concatenated = torch.cat((frame1,frame2,frame3,frame4),1)
+    return frames_concatenated
 
 # Hyperparameters and Utilities Done
 
@@ -215,6 +261,7 @@ def optimize_model():
     next_state_values.volatile = False
     # Compute the expected Q values
     expected_state_action_values = (next_state_values * GAMMA) + reward_batch
+    expected_q_value = expected_state_action_values
 
     # Compute Huber loss
     loss = F.smooth_l1_loss(state_action_values, expected_state_action_values)
@@ -230,54 +277,71 @@ def optimize_model():
 
 # Main part with game execution
 
-#logger = logging.getLogger()
-#logger.setLevel(logging.INFO)
 
-num_episodes = 2000
+env.init()
+
+num_episodes = 10000
 for i_episode in range(num_episodes):
     # Initialize the environment and state
-    state = env.reset()
+    env.reset_game()
+    state = env.getScreenRGB()
     state = BCHW_format(state)
+    #print(state.shape)
+    frames = (state,state,state,state)
+    state = last_4_frames(state,frames[1], frames[2],frames[3])
 
-    4_frames = [state,state,state,state]
-    state = last_4_frames(state,4_frames[1],4_frames[2],4_frames[3])
-
-    print("New Episode")
+    #print("New Episode")
     for t in count():
         # Select and perform an action
-        env.render()
+        #env.render()
         action = select_action(state)
-        next_state, reward, done, _ = env.step(action[0, 0])
+        if observe_or_train % FRAME_PER_ACTION != 0:
+            action = torch.LongTensor([[1]])
+            #print(action)
+        reward = env.act(env.getActionSet()[action[0,0]])
+        next_state = env.getScreenRGB()
+        done = env.game_over()
+        #next_state, reward, done, _ = env.step(action[0, 0])
         
-        if reward < 0:
-            reward = -10
-        else:
-            reward = 1
         #print(reward)
-        
         reward = Tensor([reward])
         
         if not done:
             next_state = BCHW_format(next_state)
+            frames = (next_state, frames[0], frames[1], frames[2])
+            next_state = last_4_frames(next_state,frames[1],frames[2],frames[3])
         else:
             next_state = None
 
         # Store the transition in memory
-        4_frames = [next_state, 4_frames[0], 4_frames[1], 4_frames[2]]
-        next_state = last_4_frames(next_state,4_frames[1],4_frames[2],4_frames[3])
         memory.push(state, action, next_state, reward) # edit
 
         # Move to the next state
         state = next_state
+        
+        #print training info
+        if observe_or_train <= OBSERVE:
+            state_of_training = "observe"
+        elif t > OBSERVE and t <= OBSERVE + EPS_DECAY :
+            state_of_training = "explore"
+        else:
+            state_of_training = "train"
+        print("TIMESTEP", observe_or_train, "/ STATE", state_of_training,\
+             "/ ACTION", action[0,0],"/ REWARD", reward[0],"/ Expected_Q",expected_q_value)
 
         # Perform one step of the optimization (on the target network)
-        optimize_model()
-        if done:
-            episode_durations.append(t + 1)
-            plot_durations()
-            break
+        if observe_or_train > OBSERVE :
+            optimize_model()
+            if done:
+                episode_durations.append(t + 1)
+                plot_durations()
+                break
+        else:
+            if done:
+                break
+        #just observe or train
+        observe_or_train += 1
 
-print('Complete')
 
 # Main part with game execution Done
 
@@ -290,6 +354,5 @@ for duration in episode_durations:
 
 textfile.close()
 
-env.close()
 plt.ioff()
 plt.show()
